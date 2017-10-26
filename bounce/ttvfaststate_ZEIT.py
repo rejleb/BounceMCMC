@@ -19,7 +19,7 @@ class TTVState(object):
         self.n_plan = ttvfast_settings[3]
         self.input_flags = ttvfast_settings[4]
         self.logp = None
-        self.Nvars = 14
+        self.Nvars = 21
         
     def get_logp(self, obs):
         if (self.priorHard()):
@@ -33,9 +33,10 @@ class TTVState(object):
     def get_chi2(self, obs):
         params = self.stel_m_planets
         planet1 = ttvfast.models.Planet(*params[:7])
-        planet2 = ttvfast.models.Planet(*params[7:])
-        stellar_mass = 0.95573417954
-        planets = [planet1, planet2]            
+        planet2 = ttvfast.models.Planet(*params[7:14])
+        planet3 = ttvfast.models.Planet(*params[14:])
+        stellar_mass = 0.74
+        planets = [planet1, planet2, planet3]            
         #get results...
         results = ttvfast.ttvfast(planets, stellar_mass, self.Time, self.dt, self.Total)
         integer_indices, epochs, times, rsky, vsky = results["positions"]
@@ -73,17 +74,16 @@ class TTVState(object):
     
     def get_ttv(self, obs,transitcheck=True):
         params = self.stel_m_planets
-        #planet1 = ttvfast.models.Planet(*params[1:1 + 7])
         planet1 = ttvfast.models.Planet(*params[:7])
-        #planet2 = ttvfast.models.Planet(*params[1 + 7:])
-        planet2 = ttvfast.models.Planet(*params[7:])
-        #stellar_mass = params[0]
-        stellar_mass = 0.95573417954
-        planets = [planet1, planet2]            
+        planet2 = ttvfast.models.Planet(*params[7:14])
+        planet3 = ttvfast.models.Planet(*params[14:])
+        stellar_mass = 0.74
+        planets = [planet1, planet2, planet3]            
         results = ttvfast.ttvfast(planets, stellar_mass, self.Time, self.dt, self.Total)
         integer_indices, epochs, times, rsky, vsky = results["positions"]
         t1_times = []
         t2_times = []
+        t3_times = []
         count = 0
         for i in range(len(times)):
             if(integer_indices[i]==0):
@@ -92,12 +92,23 @@ class TTVState(object):
                     count +=1
                 else:
                     break
+            elif(integer_indices[i]==1):
+                if( not np.isclose(times[i],-2.0)):
+                    t2_times.append(times[i])
+                else:
+                    break
             else:
-                t2_times.append(times[i])
+                t3_times.append(times[i])
         if(transitcheck):
             if(count != len(obs.times)):
                 print "Number of transits did not match [{a}=/={b}], logp=inf.".format(a=count,b=len(obs.times),time=datetime.utcnow())
+                print t1_times
+                print t2_times
+                print t3_times
                 return np.inf
+        print t1_times
+        print t2_times
+        print t3_times
         return t1_times
 
     def get_ttv_plotting(self, obs, checktransits=True):

@@ -5,8 +5,6 @@ import observations
 import state
 import mcmc
 import numpy as np
-#corner plots temporarily taken out while running on cluster
-#import corner
 import hashlib
 from datetime import datetime
 from scipy import stats
@@ -97,13 +95,15 @@ def run_mh(label, Niter, true_state, obs, scal, step, printing_every=400):
     bundle = McmcBundle(mh, chain, chainlogp, clocktimes, collchain, obs, Niter, true_state, label, hyperparams)
     return bundle, h
 
-def run_emcee(label, Niter, true_state, obs, Nwalkers, scal, a=2, printing_every=400):
-    ens = mcmc.Ensemble(true_state,obs,scales=scal,nwalkers=Nwalkers, a=a)
+def run_emcee(label, Niter, true_state, obs, Nwalkers, scal, a=2, printing_every=400, listmode=False):
+    ens = mcmc.Ensemble(true_state,obs,scales=scal,nwalkers=Nwalkers, a=a,listmode=listmode)
     h = hashlib.md5()
-    h.update(str(true_state.planets))
+    #temporarily taken out for compatibility with ttvfaststate.py which does not have self.planets
+    #h.update(str(true_state.planets))
     h.update(label)
     hyperparams = {'scale':scal, 'walkers':Nwalkers, 'a':a}
-    save_aux_before_run(label, true_state, Niter, hyperparams, h)
+    #temporarily taken out for compatibility with ttvfaststate.py which does not have self.planets
+    #save_aux_before_run(label, true_state, Niter, hyperparams, h)
     listchain = np.zeros((Nwalkers,ens.state.Nvars,0))
     listchainlogp = np.zeros((Nwalkers,0))
     collchain = np.zeros((0,ens.state.Nvars))
@@ -238,11 +238,13 @@ def run_alsmala(label, Niter, true_state, obs, eps, alpha, bern_a, bern_b, print
     save_aux_before_run(label, true_state, Niter, hyperparams, h)
     chain = np.zeros((0,alsmala.state.Nvars))
     chainlogp = np.zeros(0)
+    collchain = np.zeros((0,alsmala.state.Nvars))
+    eigenlist = np.zeros(0)
     tries = 0
-    clocktimes = []
-    clocktimes.append(datetime.utcnow())
+    clocktimes = [[]]
+    clocktimes[0].append(datetime.utcnow())
     for i in range(Niter):
-        if( (np.exp(-bern_a*(i)/Niter)) >np.random.uniform()):
+        if( (1-bern_b)*(np.exp(-bern_a*(i)/Niter))+bern_b >np.random.uniform()):
             if(alsmala.step()):
                 tries +=1
         else:
@@ -250,14 +252,20 @@ def run_alsmala(label, Niter, true_state, obs, eps, alpha, bern_a, bern_b, print
                 tries += 1
         chainlogp = np.append(chainlogp,alsmala.state.get_logp(obs))
         chain = np.append(chain,[alsmala.state.get_params()],axis=0)
+        if(alsmala.state.collisionGhostParams is not None):
+            collchain = np.append(collchain, [alsmala.state.collisionGhostParams], axis=0)
+            alsmala.state.collisionGhostParams = None
+        la, Q = np.linalg.eig(-alsmala.state.logp_dd)
+        lam = la*1./np.tanh(alpha*la)
+        eigenlist = np.append(eigenlist,lam)
         if(i % printing_every == 1):
             print ("Progress: {p:.5}%, {n} accepted steps have been made, time: {t}".format(p=100.*(float(i)/Niter),t=datetime.utcnow(),n=tries))
-            clocktimes.append(datetime.utcnow())
-    clocktimes.append(datetime.utcnow())
+            clocktimes[0].append(datetime.utcnow())
+    clocktimes[0].append(datetime.utcnow())
     print("Acceptance rate: %.2f%%"%((tries/float(Niter))*100))
     print "The id of the simulation is: {r}".format(r=h.hexdigest())
     print "The end time of the simulation is {r}".format(r=datetime.utcnow())
-    bundle = McmcBundle(smala, chain, chainlogp, clocktimes, collchain, obs, Niter, true_state, label, hyperparams, eigenlist=eigenlist)
+    bundle = McmcBundle(alsmala, chain, chainlogp, clocktimes, collchain, obs, Niter, true_state, label, hyperparams, eigenlist=eigenlist)
     return bundle, h
 
 def run_hmc(label, Niter, true_state, obs, delt, L, masses, temperatures=None, printing_every = 40):
@@ -365,12 +373,67 @@ def plot_chains(bundle, size, name='Name_left_empty', save=False):
         plt.savefig('mcmcplots/{n}.png'.format(n=name), bbox_inches='tight')
         plt.close('all')
 
+def ttv_from_times(t1_times):
+    slope, intercept, r_value, p_value, std_err = stats.linregress(np.arange(len(t1_times)),t1_times)
+    diff = (np.arange(len(t1_times))*slope + intercept) - np.asarray(t1_times)
+    return t1_times, diff
+
+def plot_ttv_results(bundle, Ntrails, size):
+    return_trimmed_results(bundle, 50, [1,1], 0.5, plotting=False)
+    print "Begin plotting..."
+    Niter, mcmc, chain, chainlogp, true_state, obs, is_emcee, Nwalkers = bundle.mcmc_Niter, bundle.mcmc, bundle.mcmc_chain, bundle.mcmc_chainlogp, bundle.mcmc_initial_state, bundle.mcmc_obs, bundle.mcmc_is_emcee, bundle.mcmc_Nwalkers
+    trimmedchain = bundle.mcmc_trimmedchain
+    list_of_states = []
+    for i in range(len(trimmedchain)):
+        s = mcmc.state.deepcopy()
+        s.set_params(chain[i])
+        list_of_states.append(s)
+
+    fig = plt.figure(figsize=(size[0],size[1]))
+    #font = FontProperties()
+    #font.set_family('serif')
+    #font.set_style('italic')
+    ax = plt.subplot(111)
+    selected = np.sort(np.random.choice(len(list_of_states), Ntrails))
+    print "Selected some {nt} samples to plot.".format(nt=Ntrails)
+    for j in range(len(selected)):
+        a = list_of_states[selected[j]]
+        ax.plot(*a.get_ttv_plotting(obs), alpha=0.28, color="darkolivegreen")
+        
+    averageRandomState = mcmc.state.deepcopy()
+    averageRandomChain = np.average(chain, axis=0)
+    averageRandomState.set_params(averageRandomChain)
+    ax.plot(*true_state.get_ttv_plotting(obs), color="purple")
+    #plt.errorbar(obs.t, obs.rv, yerr=obs.err, fmt='.r')
+    ax.set_xticklabels([])
+    plt.grid()
+    ax2=fig.add_axes([0.125, -0.63, 0.775, 0.7]) 
+    #ax.set_ylabel("Initial TTV", fontproperties=font, fontsize=26)
+    #ax2.set_ylabel("Average Result TTV", fontproperties=font, fontsize=26)
+    ax.yaxis.label.set_size(26)
+    ax2.yaxis.label.set_size(26)
+    ax.tick_params(axis='both', labelsize=18)
+    ax2.tick_params(axis='both', labelsize=18)
+    plt.plot(*averageRandomState.get_ttv_plotting(obs), alpha=0.99,color="black")
+    print "Resulting average params state (randomly sampledriver.ind):"
+    #print averageRandomState.get_keys()
+    print averageRandomState.get_params()
+    #plt.errorbar(obs.t, obs.rv, yerr=obs.err, fmt='.r')
+    ax2.set_xticklabels([])
+    plt.grid()
+    plt.close('all')
+    return fig
+
 
 def return_trimmed_results(bundle, Ntrails, size, burn_in_fraction, take_every_n=1, name='Name_left_empty', save=False, plotting=True):
     Niter, mcmc, chain, chainlogp, true_state, obs, is_emcee, Nwalkers = bundle.mcmc_Niter, bundle.mcmc, bundle.mcmc_chain, bundle.mcmc_chainlogp, bundle.mcmc_initial_state, bundle.mcmc_obs, bundle.mcmc_is_emcee, bundle.mcmc_Nwalkers
+    if(bundle.mcmc_is_emcee):
+        assert (Niter/Nwalkers*burn_in_fraction % 1==0.0),"Burn in fraction must divide Niter/Nwalkers!"
     averageRandomChain = np.zeros(mcmc.state.Nvars)
+    Allocationsize = int(float(1./take_every_n)*Niter*(1.-burn_in_fraction))
     list_of_states = []
-    list_of_chainlogp = np.zeros(0)
+    list_of_chainlogp = np.zeros(Allocationsize)
+    iteration = 0
     if(is_emcee):
         for i in range(Nwalkers):
             for c in range(int( ((i)*Niter/Nwalkers)+Niter/Nwalkers*burn_in_fraction), (i+1)*Niter/Nwalkers):
@@ -378,7 +441,9 @@ def return_trimmed_results(bundle, Ntrails, size, burn_in_fraction, take_every_n
                     s = mcmc.state.deepcopy()
                     s.set_params(chain[c])
                     list_of_states.append(s)
-                    list_of_chainlogp = np.append(list_of_chainlogp, chainlogp[c])
+                    #list_of_chainlogp = np.append(list_of_chainlogp, chainlogp[c])
+                    list_of_chainlogp[iteration] = chainlogp[c]
+                    iteration += 1
                     averageRandomChain += chain[c]
     else:
         for c in range(int(Niter*burn_in_fraction), Niter):
@@ -386,12 +451,17 @@ def return_trimmed_results(bundle, Ntrails, size, burn_in_fraction, take_every_n
                 s = mcmc.state.deepcopy()
                 s.set_params(chain[c])
                 list_of_states.append(s)
-                list_of_chainlogp = np.append(list_of_chainlogp, chainlogp[c])
+                #list_of_chainlogp = np.append(list_of_chainlogp, chainlogp[c])
+                list_of_chainlogp[iteration] = chainlogp[c]
+                iteration += 1
                 averageRandomChain += chain[c]
     print "Eliminated burn in, sampled every {n}.".format(n=take_every_n)
-    list_of_results = np.zeros((0,mcmc.state.Nvars))    
+    list_of_results = np.zeros((Allocationsize,mcmc.state.Nvars))    
     for i in range(len(list_of_states)):
-        list_of_results = np.append(list_of_results, [list_of_states[i].get_params()], axis=0)
+        if(i%1000==999999):
+            print "Appending results: {i}%".format(i=float(i)/len(list_of_states))
+        #list_of_results = np.append(list_of_results, [list_of_states[i].get_params()], axis=0)
+        list_of_results[i] = list_of_states[i].get_params()
     bundle.mcmc_trimmedchain, bundle.mcmc_trimmedchainlogp  = list_of_results, list_of_chainlogp
     if(plotting):
         plot_trimmed_results(bundle, Ntrails, size, name, save)
@@ -455,12 +525,12 @@ def plot_trimmed_results(bundle, Ntrails, size, name='', save=False):
 
 #disable this function for now since installing corners on scinet is annoying, this is the fastest way to not do this.
 def plot_corners(bundle, name='Name_left_empty', save=False):
+    import corner
     chain, mcmc, true_state = bundle.mcmc_chain, bundle.mcmc, bundle.mcmc_initial_state
     somestate = mcmc.state.deepcopy()
-    #figure = corner.corner(chain, labels=somestate.get_keys(), plot_contours=False, truths=true_state.get_params(),label_kwargs={"fontsize":33},max_n_ticks=4)
-    #plt.savefig('mcmcplots/{n}.png'.format(n=name), bbox_inches='tight')
-    #plt.close('all')
-    pass
+    figure = corner.corner(chain, labels=somestate.get_keys(), plot_contours=False, truths=true_state.get_params(),label_kwargs={"fontsize":33},max_n_ticks=4)
+    if(save):    
+        plt.savefig('mcmcplots/{n}.png'.format(n=name), bbox_inches='tight')
 
 def plot_ACTimes(bundle, size, fraction=1.0,name='Name_left_empty', save=False, plotting=False): 
     chain, mcmc, niter = bundle.mcmc_trimmedchain, bundle.mcmc, bundle.mcmc_Niter
@@ -580,14 +650,18 @@ def tness(bundle):
     bundle.mcmc_dt = dt 
 
 
-def compare_cdf(chain1, chain2, mcmc, size):
-    for i in range(len(np.transpose(chain1))):
+def compare_cdf(list_o_bundles, size, fontsize=28):
+    mcmc = list_o_bundles[0].mcmc
+    for i in range(len(np.transpose(list_o_bundles[0].mcmc_trimmedchain))):
         fig = plt.figure(figsize=(size[0],size[1]))
         ax = plt.subplot(111)
-        plt.plot(sorted(np.transpose(chain1)[i]), np.linspace(0,1, len(np.transpose(chain1)[i])))
-        plt.plot(sorted(np.transpose(chain2)[i]), np.linspace(0,1, len(np.transpose(chain2)[i])))
-        ax.xaxis.label.set_size(28)
-        ax.yaxis.label.set_size(28)
+        for b in range(len(list_o_bundles)):
+            chain = list_o_bundles[b].mcmc_trimmedchain
+            legend_label = list_o_bundles[b].mcmc_label
+            plt.plot(sorted(np.transpose(chain)[i]), np.linspace(0,1, len(np.transpose(chain)[i])), label=legend_label)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+        ax.xaxis.label.set_size(fontsize)
+        ax.yaxis.label.set_size(fontsize)
         ax.set_xlabel(mcmc.state.get_keys()[i])
         plt.ylabel('Fractional CDF')
         
@@ -673,7 +747,7 @@ def bundle_stats(bundle):
     #    print "Some quantities are missing! Cannot compute statistics."
 
 def gelmanrubin_statistic(segments, bundle):
-    chain, mcmc = bundle.mcmc_chain, bundle.mcmc
+    chain, mcmc = bundle.mcmc_trimmedchain, bundle.mcmc
     chaint = np.transpose(chain)
     gelmanrubinresults = np.zeros(len(chaint))
     for i in range(len(chaint)):

@@ -42,9 +42,12 @@ def lnprob(x, e):
 emcee MCMC coupled with rebound.
 '''
 class Ensemble(Mcmc):
-    def __init__(self, initial_state, obs, scales, nwalkers=10, a=2):
+    def __init__(self, initial_state, obs, scales, nwalkers=10, a=2, listmode=False):
         super(Ensemble,self).__init__(initial_state, obs)
-        self.set_scales(scales)
+        if(listmode):
+            self.set_scales_listmode(scales)
+        else:
+            self.set_scales(scales)
         self.nwalkers = nwalkers
         self.states = [self.state.get_params() for i in range(nwalkers)]
         self.previous_states = [self.state.get_params() for i in range(nwalkers)]
@@ -79,6 +82,12 @@ class Ensemble(Mcmc):
         for i,k in enumerate(keys):
             if k in scales:
                 self.scales[i] = scales[k]
+
+    '''
+    Sets the scales for the initial random distribution of walkers. Mileage may vary.
+    '''
+    def set_scales_listmode(self, scales):
+        self.scales = scales
 
 '''
 Metropolis-Hastings MCMC coupled with rebound.
